@@ -9,6 +9,12 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import pandas as pd
 from google.cloud import storage
+from flask_session import Session
+
+# Configure Flask-Session
+app.config["SESSION_PERMANENT"] = False
+app.config["SESSION_TYPE"] = "filesystem"  # Change to 'redis' if using Redis
+Session(app)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -50,9 +56,10 @@ def oauth_callback():
 
     try:
         token_data = get_token(code)
-        session['access_token'] = token_data.get('access_token')
+        session['access_token'] = token_data.get('access_token')  # Store token in session
         session['refresh_token'] = token_data.get('refresh_token')
-
+        session.modified = True  # Ensure session updates
+        
         logging.info(f"OAuth Successful! Access Token: {session['access_token']}")
         return redirect(url_for('index'))
     except requests.exceptions.RequestException as e:
