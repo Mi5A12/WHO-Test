@@ -10,18 +10,18 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from google.cloud import storage
 from flask_session import Session
-
-
+from datetime import timedelta
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
-app.secret_key = 'your_secret_key'
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'your_secret_key')
 
-# Configure Flask-Session
-app.config["SESSION_PERMANENT"] = False
-app.config["SESSION_TYPE"] = "filesystem"  # Change to 'redis' if using Redis
+# Configure Flask-Session for persistent storage
+app.config["SESSION_PERMANENT"] = True
+app.config["SESSION_TYPE"] = "filesystem"
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=2)
 Session(app)
 
 # Configuration
@@ -31,6 +31,13 @@ GCS_BUCKET_NAME = os.getenv('GCS_BUCKET_NAME', 'child-growth-charts')
 CLIENT_ID = os.getenv("BITRIX_CLIENT_ID")
 CLIENT_SECRET = os.getenv("BITRIX_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("BITRIX_REDIRECT_URI")
+
+# Ensure directories exist
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+
+# Google Cloud Storage client
+storage_client = storage.Client()
 
 def get_oauth_url():
     return f"https://oauth.bitrix.info/oauth/authorize?client_id={CLIENT_ID}&response_type=code&redirect_uri={REDIRECT_URI}"
@@ -48,6 +55,21 @@ def get_token(code):
     response.raise_for_status()
     return response.json()
 
+def refresh_bitrix_token(refresh_token):
+    url = "https://oauth.bitrix.info/oauth/token/"
+    data = {
+        'grant_type': 'refresh_token',
+        'client_id': CLIENT_ID,
+        'client_secret': CLIENT_SECRET,
+        'refresh_token': refresh_token
+    }
+    response = requests.post(url, data=data)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        logging.error(f"Failed to refresh token: {response.text}")
+        return None
+
 @app.route('/oauth/callback')
 def oauth_callback():
     code = request.args.get('code')
@@ -57,16 +79,23 @@ def oauth_callback():
 
     try:
         token_data = get_token(code)
-        session['access_token'] = token_data.get('access_token')  # Store token in session
-        session['refresh_token'] = token_data.get('refresh_token')
+        access_token = token_data.get('access_token')
+        refresh_token = token_data.get('refresh_token')
+
+        if not access_token:
+            logging.error("Failed to retrieve access token from Bitrix24.")
+            return jsonify({"status": "error", "message": "Failed to retrieve access token"}), 500
+
+        session['access_token'] = access_token
+        session['refresh_token'] = refresh_token
         session.modified = True  # Ensure session updates
-        
+
         logging.info(f"OAuth Successful! Access Token: {session['access_token']}")
         return redirect(url_for('index'))
     except requests.exceptions.RequestException as e:
         logging.error(f"Failed to get token: {e.response.text if e.response else str(e)}")
         return jsonify({"status": "error", "message": f"Failed to get token: {e.response.text if e.response else str(e)}"}), 500
-    
+
 @app.route('/')
 def index():
     access_token = session.get('access_token')
@@ -76,24 +105,26 @@ def index():
         logging.warning("No access token found, redirecting to Bitrix login.")
         return redirect(get_oauth_url())
 
-    # Test if token is valid by making an API request
+    # Test if token is valid
     test_url = "https://vitrah.bitrix24.com/rest/user.current"
     headers = {'Authorization': f'Bearer {access_token}'}
     response = requests.get(test_url, headers=headers)
 
     if response.status_code == 401:  # Unauthorized, token expired
-        logging.warning("Access token expired. Refreshing token...")
-        try:
-            new_token_data = refresh_token(refresh_token)
+        logging.warning("Access token expired. Attempting to refresh...")
+        new_token_data = refresh_bitrix_token(refresh_token)
+        if new_token_data:
             session['access_token'] = new_token_data['access_token']
             session['refresh_token'] = new_token_data['refresh_token']
             session.modified = True
-        except Exception as e:
-            logging.error(f"Token refresh failed: {e}")
+            logging.info("Token refreshed successfully!")
+        else:
+            logging.error("Token refresh failed. Redirecting to login.")
             return redirect(get_oauth_url())
 
     logging.info(f"User is authenticated. Access Token: {session['access_token']}")
     return render_template('index.html')
+
 
 # Ensure directories exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
