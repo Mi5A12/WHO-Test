@@ -24,8 +24,10 @@ app.config["SESSION_TYPE"] = "filesystem"  # Store sessions on disk
 app.config["SESSION_FILE_DIR"] = "/tmp/flask_session"  # Ensure sessions are stored in a known location
 app.config["SESSION_USE_SIGNER"] = True  # Encrypt session cookies
 app.config["SESSION_COOKIE_NAME"] = "bitrix_session"
-app.config["SESSION_COOKIE_SECURE"] = True  # Ensures session cookies are only sent over HTTPS
+app.config["SESSION_COOKIE_SECURE"] = True  # Only send session cookies over HTTPS
+app.config["SESSION_COOKIE_HTTPONLY"] = True  # Prevent JavaScript from accessing session cookie
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=2)  # Session lifetime
+app.config["SESSION_REFRESH_EACH_REQUEST"] = True  # Refresh session lifetime on each request
 
 Session(app)
 
@@ -91,13 +93,14 @@ def oauth_callback():
             logging.error("Failed to retrieve access token from Bitrix24.")
             return jsonify({"status": "error", "message": "Failed to retrieve access token"}), 500
 
-        # Store the tokens in session
+        # Store tokens in session
         session['access_token'] = access_token
         session['refresh_token'] = refresh_token
         session.modified = True  # Ensure session updates
 
+        # Log session contents for debugging
         logging.info(f"OAuth Successful! Access Token: {session.get('access_token')}")
-        logging.info(f"Session data after OAuth: {session}")
+        logging.info(f"Session Data after OAuth: {session}")
 
         return redirect(url_for('index'))
     except requests.exceptions.RequestException as e:
