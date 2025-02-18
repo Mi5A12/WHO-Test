@@ -20,14 +20,14 @@ app.secret_key = os.getenv('FLASK_SECRET_KEY', 'your_secret_key')
 
 # Configure Flask-Session for persistent storage
 app.config["SESSION_PERMANENT"] = True
-app.config["SESSION_TYPE"] = "filesystem"  # Store sessions on disk
-app.config["SESSION_FILE_DIR"] = "/tmp/flask_session"  # Ensure sessions are stored in a known location
-app.config["SESSION_USE_SIGNER"] = True  # Encrypt session cookies
+app.config["SESSION_TYPE"] = "filesystem"
+app.config["SESSION_FILE_DIR"] = "/tmp/flask_session"
+app.config["SESSION_USE_SIGNER"] = True
 app.config["SESSION_COOKIE_NAME"] = "bitrix_session"
-app.config["SESSION_COOKIE_SECURE"] = True  # Only send session cookies over HTTPS
-app.config["SESSION_COOKIE_HTTPONLY"] = True  # Prevent JavaScript from accessing session cookie
-app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=2)  # Session lifetime
-app.config["SESSION_REFRESH_EACH_REQUEST"] = True  # Refresh session lifetime on each request
+app.config["SESSION_COOKIE_SECURE"] = False  # Set to True if using HTTPS
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=2)
+app.config["SESSION_REFRESH_EACH_REQUEST"] = True
 
 Session(app)
 
@@ -77,35 +77,36 @@ def refresh_bitrix_token(refresh_token):
         logging.error(f"Failed to refresh token: {response.text}")
         return None
 
-@app.route('/oauth/callback')
-def oauth_callback():
-    code = request.args.get('code')
-    if not code:
-        logging.error("Authorization code missing!")
-        return jsonify({"status": "error", "message": "Missing authorization code"}), 400
+@app.route('/')
+def index():
+    logging.info(f"Session Data at /: {dict(session)}")  # Log full session data
 
-    try:
-        token_data = get_token(code)
-        access_token = token_data.get('access_token')
-        refresh_token = token_data.get('refresh_token')
+    access_token = session.get('access_token')
+    refresh_token = session.get('refresh_token')
 
-        if not access_token:
-            logging.error("Failed to retrieve access token from Bitrix24.")
-            return jsonify({"status": "error", "message": "Failed to retrieve access token"}), 500
+    if not access_token:
+        logging.warning("No access token found, redirecting to Bitrix login.")
+        return redirect(get_oauth_url())
 
-        # Store tokens in session
-        session['access_token'] = access_token
-        session['refresh_token'] = refresh_token
-        session.modified = True  # Ensure session updates
+    # Test if token is valid
+    test_url = "https://vitrah.bitrix24.com/rest/user.current"
+    headers = {'Authorization': f'Bearer {access_token}'}
+    response = requests.get(test_url, headers=headers)
 
-        # Log session contents for debugging
-        logging.info(f"OAuth Successful! Access Token: {session.get('access_token')}")
-        logging.info(f"Session Data after OAuth: {session}")
+    if response.status_code == 401:  # Unauthorized, token expired
+        logging.warning("Access token expired. Attempting to refresh...")
+        new_token_data = refresh_bitrix_token(refresh_token)
+        if new_token_data:
+            session['access_token'] = new_token_data['access_token']
+            session['refresh_token'] = new_token_data['refresh_token']
+            session.modified = True
+            logging.info("Token refreshed successfully!")
+        else:
+            logging.error("Token refresh failed. Redirecting to login.")
+            return redirect(get_oauth_url())
 
-        return redirect(url_for('index'))
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Failed to get token: {e.response.text if e.response else str(e)}")
-        return jsonify({"status": "error", "message": f"Failed to get token: {e.response.text if e.response else str(e)}"}), 500
+    logging.info(f"User is authenticated. Access Token: {session['access_token']}")
+    return render_template('index.html')
 
 @app.route('/')
 def index():
