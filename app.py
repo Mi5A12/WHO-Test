@@ -20,8 +20,13 @@ app.secret_key = os.getenv('FLASK_SECRET_KEY', 'your_secret_key')
 
 # Configure Flask-Session for persistent storage
 app.config["SESSION_PERMANENT"] = True
-app.config["SESSION_TYPE"] = "filesystem"
-app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=2)
+app.config["SESSION_TYPE"] = "filesystem"  # Store sessions on disk
+app.config["SESSION_FILE_DIR"] = "/tmp/flask_session"  # Ensure sessions are stored in a known location
+app.config["SESSION_USE_SIGNER"] = True  # Encrypt session cookies
+app.config["SESSION_COOKIE_NAME"] = "bitrix_session"
+app.config["SESSION_COOKIE_SECURE"] = True  # Ensures session cookies are only sent over HTTPS
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=2)  # Session lifetime
+
 Session(app)
 
 # Configuration
@@ -86,11 +91,14 @@ def oauth_callback():
             logging.error("Failed to retrieve access token from Bitrix24.")
             return jsonify({"status": "error", "message": "Failed to retrieve access token"}), 500
 
+        # Store the tokens in session
         session['access_token'] = access_token
         session['refresh_token'] = refresh_token
         session.modified = True  # Ensure session updates
 
-        logging.info(f"OAuth Successful! Access Token: {session['access_token']}")
+        logging.info(f"OAuth Successful! Access Token: {session.get('access_token')}")
+        logging.info(f"Session data after OAuth: {session}")
+
         return redirect(url_for('index'))
     except requests.exceptions.RequestException as e:
         logging.error(f"Failed to get token: {e.response.text if e.response else str(e)}")
@@ -98,6 +106,8 @@ def oauth_callback():
 
 @app.route('/')
 def index():
+    logging.info(f"Session Data at /: {session}")
+
     access_token = session.get('access_token')
     refresh_token = session.get('refresh_token')
 
@@ -124,7 +134,6 @@ def index():
 
     logging.info(f"User is authenticated. Access Token: {session['access_token']}")
     return render_template('index.html')
-
 
 # Ensure directories exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
