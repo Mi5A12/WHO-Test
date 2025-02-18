@@ -11,10 +11,7 @@ import pandas as pd
 from google.cloud import storage
 from flask_session import Session
 
-# Configure Flask-Session
-app.config["SESSION_PERMANENT"] = False
-app.config["SESSION_TYPE"] = "filesystem"  # Change to 'redis' if using Redis
-Session(app)
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -22,14 +19,18 @@ logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
 
+# Configure Flask-Session
+app.config["SESSION_PERMANENT"] = False
+app.config["SESSION_TYPE"] = "filesystem"  # Change to 'redis' if using Redis
+Session(app)
 
 # Configuration
 UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', 'static/charts')
 DOWNLOAD_FOLDER = os.getenv('DOWNLOAD_FOLDER', 'downloads')
 GCS_BUCKET_NAME = os.getenv('GCS_BUCKET_NAME', 'child-growth-charts')
-CLIENT_ID = 'local.67b48f3a6613c3.81618977'
-CLIENT_SECRET = 'UBjSCXXd2j9MRvBIpa7Db5fmOgyk2w9AbjbJZmMR5n4ekGc342'
-REDIRECT_URI = 'https://who-test.onrender.com/oauth/callback'
+CLIENT_ID = os.getenv("BITRIX_CLIENT_ID")
+CLIENT_SECRET = os.getenv("BITRIX_CLIENT_SECRET")
+REDIRECT_URI = os.getenv("BITRIX_REDIRECT_URI")
 
 def get_oauth_url():
     return f"https://oauth.bitrix.info/oauth/authorize?client_id={CLIENT_ID}&response_type=code&redirect_uri={REDIRECT_URI}"
@@ -69,11 +70,29 @@ def oauth_callback():
 @app.route('/')
 def index():
     access_token = session.get('access_token')
+    refresh_token = session.get('refresh_token')
+
     if not access_token:
         logging.warning("No access token found, redirecting to Bitrix login.")
         return redirect(get_oauth_url())
 
-    logging.info(f"User is authenticated. Access Token: {access_token}")
+    # Test if token is valid by making an API request
+    test_url = "https://vitrah.bitrix24.com/rest/user.current"
+    headers = {'Authorization': f'Bearer {access_token}'}
+    response = requests.get(test_url, headers=headers)
+
+    if response.status_code == 401:  # Unauthorized, token expired
+        logging.warning("Access token expired. Refreshing token...")
+        try:
+            new_token_data = refresh_token(refresh_token)
+            session['access_token'] = new_token_data['access_token']
+            session['refresh_token'] = new_token_data['refresh_token']
+            session.modified = True
+        except Exception as e:
+            logging.error(f"Token refresh failed: {e}")
+            return redirect(get_oauth_url())
+
+    logging.info(f"User is authenticated. Access Token: {session['access_token']}")
     return render_template('index.html')
 
 # Ensure directories exist
@@ -425,4 +444,4 @@ def webhook():
         return jsonify({"status": "error", "message": f"An unexpected error occurred: {str(e)}"}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5002)
+    app.run(host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
