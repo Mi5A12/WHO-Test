@@ -45,23 +45,28 @@ def get_token(code):
 def oauth_callback():
     code = request.args.get('code')
     if not code:
+        logging.error("Authorization code missing!")
         return jsonify({"status": "error", "message": "Missing authorization code"}), 400
 
     try:
         token_data = get_token(code)
-        session['access_token'] = token_data['access_token']
+        session['access_token'] = token_data.get('access_token')
+        session['refresh_token'] = token_data.get('refresh_token')
+
+        logging.info(f"OAuth Successful! Access Token: {session['access_token']}")
         return redirect(url_for('index'))
     except requests.exceptions.RequestException as e:
         logging.error(f"Failed to get token: {e.response.text if e.response else str(e)}")
         return jsonify({"status": "error", "message": f"Failed to get token: {e.response.text if e.response else str(e)}"}), 500
-    except Exception as e:
-        logging.error(f"An unexpected error occurred: {str(e)}")
-        return jsonify({"status": "error", "message": f"An unexpected error occurred: {str(e)}"}), 500
     
 @app.route('/')
 def index():
-    if 'access_token' not in session:
+    access_token = session.get('access_token')
+    if not access_token:
+        logging.warning("No access token found, redirecting to Bitrix login.")
         return redirect(get_oauth_url())
+
+    logging.info(f"User is authenticated. Access Token: {access_token}")
     return render_template('index.html')
 
 # Ensure directories exist
